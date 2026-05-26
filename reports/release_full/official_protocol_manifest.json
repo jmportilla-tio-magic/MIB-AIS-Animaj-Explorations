@@ -1,0 +1,44 @@
+{
+  "test_set": "all",
+  "max_clips": null,
+  "random_seed": 0,
+  "random_mask_ratio": 0.9,
+  "preprocessing": {
+    "relative_root_translation": true,
+    "relative_root_translation_indices": [
+      0,
+      1,
+      2
+    ],
+    "range_filter_threshold": 100.0,
+    "range_filter_columns": [
+      "x_main_CTRL:translateX",
+      "x_main_CTRL:translateY",
+      "x_main_CTRL:translateZ"
+    ],
+    "filtered_clip_counts": {
+      "held_out_algorithmic": 10,
+      "held_out_random": 10,
+      "production": 1
+    },
+    "random_unmasked_indices_recorded_in_clip_csv": true
+  },
+  "dataset_roles": {
+    "held_out_algorithmic": "selection",
+    "held_out_random": "selection",
+    "production": "holdout"
+  },
+  "checkpoints": [
+    {
+      "label": "release",
+      "path": "weights"
+    }
+  ],
+  "notes": [
+    "This evaluator ports the public mib-ais test-set definitions and metric implementations into this standalone repo.",
+    "It uses the same public HDF5 files and controller-value dimensionality as the upstream release.",
+    "It applies upstream-style x_main_CTRL relative translation preprocessing and ranges.csv filtering by default.",
+    "The clip CSV records unmasked_frame_indices so random-mask evaluations can be replayed across models.",
+    "Main protocol metrics are shifted_distance and npss."
+  ]
+}

@@ -36,6 +36,10 @@ data:
       block_keyframes_h5: artifacts/hf_dataset/prod_test_dataset/vectorized_block_keyframes/test.h5
       stride: 224
 
+preprocessing:
+  relative_root_translation: true
+  range_filter_threshold: 100.0
+
 training:
   output_dir: runs/ais_release
   device: auto

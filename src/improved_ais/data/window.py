@@ -61,7 +61,7 @@ def make_training_sample(
     include_features: bool = False,
     scene_id: str | None = None,
 ) -> TrainingSample:
-    """Build the paper-style masked AIS training sample from a dense clip.
+    """Build the masked AIS training sample from a dense clip.
 
     Observed frames are encoded as ``[pose, 0]`` and missing frames as
     ``[0, 1]``. Optional deterministic features are added for later

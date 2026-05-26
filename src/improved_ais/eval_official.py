@@ -13,6 +13,11 @@ import yaml
 
 from improved_ais.checkpoint import load_improved_model, parse_checkpoint, resolve_device
 from improved_ais.data.animaj_hdf5 import AnimajClip, iter_animaj_hdf5
+from improved_ais.data.preprocessing import (
+    apply_relative_root_translation,
+    dataset_root_from_controller_h5,
+    invalid_scene_keys_from_ranges,
+)
 from improved_ais.data.window import make_training_sample
 from improved_ais.metrics import l1
 
@@ -27,6 +32,7 @@ class BenchmarkDataset:
     controller_h5: Path
     block_keyframes_h5: Path
     protocol: str
+    ranges_csv: Path | None = None
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -63,6 +69,10 @@ def _dataset_specs(config: dict[str, Any]) -> dict[str, BenchmarkDataset]:
         production_role = "holdout"
     if production is None:
         raise ValueError("config.eval.sets must include prod_test or data.holdout_sets must include prod_holdout/production")
+    def ranges_csv_for(controller_h5: str | Path) -> Path | None:
+        dataset_root = dataset_root_from_controller_h5(controller_h5)
+        return dataset_root / "ranges.csv" if dataset_root is not None else None
+
     return {
         "held_out_algorithmic": BenchmarkDataset(
             name="held_out_algorithmic",
@@ -70,6 +80,7 @@ def _dataset_specs(config: dict[str, Any]) -> dict[str, BenchmarkDataset]:
             controller_h5=Path(selection["controller_h5"]),
             block_keyframes_h5=Path(selection["block_keyframes_h5"]),
             protocol="block_keyframes",
+            ranges_csv=ranges_csv_for(selection["controller_h5"]),
         ),
         "held_out_random": BenchmarkDataset(
             name="held_out_random",
@@ -77,6 +88,7 @@ def _dataset_specs(config: dict[str, Any]) -> dict[str, BenchmarkDataset]:
             controller_h5=Path(selection["controller_h5"]),
             block_keyframes_h5=Path(selection["block_keyframes_h5"]),
             protocol="random_uniform_90",
+            ranges_csv=ranges_csv_for(selection["controller_h5"]),
         ),
         "production": BenchmarkDataset(
             name="production",
@@ -84,8 +96,30 @@ def _dataset_specs(config: dict[str, Any]) -> dict[str, BenchmarkDataset]:
             controller_h5=Path(production["controller_h5"]),
             block_keyframes_h5=Path(production["block_keyframes_h5"]),
             protocol="block_keyframes",
+            ranges_csv=ranges_csv_for(production["controller_h5"]),
         ),
     }
+
+
+def _preprocessing_config(config: dict[str, Any]) -> dict[str, Any]:
+    preprocessing = config.get("preprocessing", {})
+    return {
+        "relative_root_translation": bool(preprocessing.get("relative_root_translation", True)),
+        "range_filter_threshold": preprocessing.get("range_filter_threshold", 100.0),
+    }
+
+
+def _preprocess_clip(clip: AnimajClip, *, relative_root_translation: bool) -> AnimajClip:
+    if not relative_root_translation:
+        return clip
+    return AnimajClip(
+        clip_id=clip.clip_id,
+        vectors=apply_relative_root_translation(clip.vectors),
+        block_keyframes=clip.block_keyframes,
+        animation_keyframes=clip.animation_keyframes,
+        episode_id=clip.episode_id,
+        scene_id=clip.scene_id,
+    )
 
 
 def _official_npss(pred: np.ndarray, target: np.ndarray, eps: float = 1e-9) -> float:
@@ -132,10 +166,10 @@ def _official_shifted_distance(
         candidates = _candidate_motions(start, end, pred, min_frame=min_frame, max_frame=max_frame)
         if not candidates:
             continue
-        distances = [float(np.linalg.norm(candidate - gt_motion, ord=1)) for candidate in candidates]
+        distances = [float(np.sum(np.abs(candidate - gt_motion))) for candidate in candidates]
         best_motion = candidates[int(np.argmin(distances))]
         frames_to_consider = list(range(end - start + 1))
-        total += float(np.linalg.norm(gt_motion[frames_to_consider] - best_motion[frames_to_consider], ord=1))
+        total += float(np.sum(np.abs(gt_motion[frames_to_consider] - best_motion[frames_to_consider])))
         total_frames += len(frames_to_consider)
     return float(total / max(1, total_frames))
 
@@ -185,6 +219,7 @@ def _clip_row(dataset: str, model_name: str, clip: AnimajClip, pred: np.ndarray,
         "scene_id": clip.scene_id or "",
         "frames": int(len(clip.vectors)),
         "unmasked_frames": int(len(unmasked)),
+        "unmasked_frame_indices": json.dumps([int(i) for i in unmasked], separators=(",", ":")),
         "missing_frames": missing_frames,
         "mask_ratio": float(missing_frames / max(1, len(clip.vectors))),
         "shifted_distance": _official_shifted_distance(
@@ -229,7 +264,7 @@ def _write_dashboard(path: Path, *, rows: list[dict[str, Any]], summary: list[di
             "manifest": manifest,
             "metrics": ["shifted_distance", "npss", "missing_l1", "full_l1"],
             "metricInfo": {
-                "shifted_distance": "Paper-style shifted temporal L1. Lower is better. This is the main timing-tolerant pose error metric.",
+                "shifted_distance": "Shifted temporal L1. Lower is better. This is the main timing-tolerant pose error metric.",
                 "npss": "Normalized Power Spectrum Similarity. Lower is better. This measures temporal frequency/rhythm mismatch.",
                 "missing_l1": "Mean absolute controller error only on masked frames.",
                 "full_l1": "Mean absolute controller error over the full sequence.",
@@ -409,7 +444,7 @@ def _write_dashboard(path: Path, *, rows: list[dict[str, Any]], summary: list[di
         const delta = a && b ? +a[m] - +b[m] : NaN;
         return `<div class="metric card" title="${{DATA.metricInfo[m]}}"><div class="label">${{m}}</div><div class="value">${{a ? fmt(a[m]) : ""}}</div><div class="delta ${{betterClass(m, delta)}}">vs ${{modelB}}: ${{fmt(delta)}}</div><div class="hint">${{DATA.metricInfo[m]}}</div></div>`;
       }}).join("");
-      $("context").innerHTML = `<div class="note"><strong>Main paper-style metrics:</strong> shifted_distance and npss. Lower is better.</div>` +
+      $("context").innerHTML = `<div class="note"><strong>Main protocol metrics:</strong> shifted_distance and npss. Lower is better.</div>` +
         DATA.manifest.notes.map(n => `<div class="note">${{n}}</div>`).join("") +
         `<table><tbody><tr><th>test set</th><td>${{testSet}}</td></tr><tr><th>dataset role</th><td>${{DATA.manifest.dataset_roles?.[testSet] || "unknown"}}</td></tr><tr><th>random seed</th><td>${{DATA.manifest.random_seed}}</td></tr><tr><th>random mask ratio</th><td>${{DATA.manifest.random_mask_ratio}}</td></tr><tr><th>max clips</th><td>${{DATA.manifest.max_clips ?? "all"}}</td></tr></tbody></table>`;
       drawBars($("barChart"), rows, metric);
@@ -465,18 +500,33 @@ def run_official_protocol_benchmark(
     device = resolve_device(device_name)
     output_dir.mkdir(parents=True, exist_ok=True)
     specs = _dataset_specs(config)
+    preprocessing = _preprocessing_config(config)
     selected = TEST_SETS if test_set == "all" else (test_set,)
     models = {spec.label: load_improved_model(spec.path, device=str(device)) for spec in checkpoints}
     rng = np.random.default_rng(random_seed)
 
     rows: list[dict[str, Any]] = []
+    filtered_counts: dict[str, int] = {}
     for name in selected:
         spec = specs[name]
         if not spec.controller_h5.exists():
             raise FileNotFoundError(f"controller HDF5 not found for {name}: {spec.controller_h5}")
         if not spec.block_keyframes_h5.exists():
             raise FileNotFoundError(f"block keyframes HDF5 not found for {name}: {spec.block_keyframes_h5}")
+        invalid_scenes = invalid_scene_keys_from_ranges(
+            spec.ranges_csv,
+            threshold=preprocessing["range_filter_threshold"],
+        )
+        filtered_counts[name] = 0
         for clip in iter_animaj_hdf5(spec.controller_h5, spec.block_keyframes_h5, max_clips=max_clips):
+            scene_key = (clip.episode_id or "", clip.scene_id or "")
+            if scene_key in invalid_scenes:
+                filtered_counts[name] += 1
+                continue
+            clip = _preprocess_clip(
+                clip,
+                relative_root_translation=bool(preprocessing["relative_root_translation"]),
+            )
             if spec.protocol == "random_uniform_90":
                 unmasked = _random_uniform_unmasked(len(clip.vectors), ratio_masked=random_mask_ratio, rng=rng)
             else:
@@ -497,12 +547,26 @@ def run_official_protocol_benchmark(
         "max_clips": max_clips,
         "random_seed": random_seed,
         "random_mask_ratio": random_mask_ratio,
+        "preprocessing": {
+            "relative_root_translation": preprocessing["relative_root_translation"],
+            "relative_root_translation_indices": [0, 1, 2],
+            "range_filter_threshold": preprocessing["range_filter_threshold"],
+            "range_filter_columns": [
+                "x_main_CTRL:translateX",
+                "x_main_CTRL:translateY",
+                "x_main_CTRL:translateZ",
+            ],
+            "filtered_clip_counts": filtered_counts,
+            "random_unmasked_indices_recorded_in_clip_csv": True,
+        },
         "dataset_roles": {name: specs[name].role for name in selected},
         "checkpoints": [{"label": spec.label, "path": str(spec.path)} for spec in checkpoints],
         "notes": [
-            "This adapter ports the public official test protocols and metrics into this repo for local model comparisons.",
-            "It is closer to the paper than the exploratory dashboard, but the exact upstream Lightning datamodule remains the final oracle.",
-            "Main paper metrics map to shifted_distance and npss.",
+            "This evaluator ports the public mib-ais test-set definitions and metric implementations into this standalone repo.",
+            "It uses the same public HDF5 files and controller-value dimensionality as the upstream release.",
+            "It applies upstream-style x_main_CTRL relative translation preprocessing and ranges.csv filtering by default.",
+            "The clip CSV records unmasked_frame_indices so random-mask evaluations can be replayed across models.",
+            "Main protocol metrics are shifted_distance and npss.",
         ],
     }
     manifest_json.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

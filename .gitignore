@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local training/evaluation artifacts
+artifacts/
+runs/
+reports/tmp/
