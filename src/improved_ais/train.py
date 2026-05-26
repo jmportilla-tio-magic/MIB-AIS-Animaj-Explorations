@@ -154,7 +154,21 @@ def _dataset_specs_from_config(config: dict[str, Any]) -> dict[str, list[WindowD
     return {"train": train_specs, "selection": selection_specs, "holdout": holdout_specs, "benchmark": benchmark_specs}
 
 
-def _make_window_dataset(spec: WindowDatasetSpec, *, clip_length: int):
+def _preprocessing_config(config: dict[str, Any]) -> dict[str, Any]:
+    preprocessing = config.get("preprocessing", {})
+    return {
+        "relative_root_translation": bool(preprocessing.get("relative_root_translation", True)),
+        "range_filter_threshold": preprocessing.get("range_filter_threshold", 100.0),
+    }
+
+
+def _make_window_dataset(
+    spec: WindowDatasetSpec,
+    *,
+    clip_length: int,
+    relative_root_translation: bool = True,
+    range_filter_threshold: float | None = 100.0,
+):
     return AnimajWindowDataset(
         spec.controller_h5,
         spec.block_keyframes_h5,
@@ -162,13 +176,16 @@ def _make_window_dataset(spec: WindowDatasetSpec, *, clip_length: int):
         stride=spec.stride,
         max_clips=spec.max_clips,
         max_windows=spec.max_windows,
+        relative_root_translation=relative_root_translation,
+        range_filter_threshold=range_filter_threshold,
     )
 
 
 def _build_train_dataset(config: dict[str, Any], specs: list[WindowDatasetSpec]):
     torch = _require_torch()
     clip_length = int(config["data"].get("clip_length", 224))
-    datasets = [_make_window_dataset(spec, clip_length=clip_length) for spec in specs]
+    preprocessing = _preprocessing_config(config)
+    datasets = [_make_window_dataset(spec, clip_length=clip_length, **preprocessing) for spec in specs]
     if len(datasets) == 1:
         return datasets[0]
     return torch.utils.data.ConcatDataset(datasets)
@@ -183,12 +200,13 @@ def _build_eval_loaders(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     data_cfg = config["data"]
     clip_length = int(data_cfg.get("clip_length", 224))
+    preprocessing = _preprocessing_config(config)
 
     loaders = {}
     roles = {}
     for role in ("selection", "holdout", "benchmark"):
         for spec in specs_by_role.get(role, []):
-            dataset = _make_window_dataset(spec, clip_length=clip_length)
+            dataset = _make_window_dataset(spec, clip_length=clip_length, **preprocessing)
             loaders[spec.name] = _make_loader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
             roles[spec.name] = spec.role
     return loaders, roles

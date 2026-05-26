@@ -6,6 +6,11 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from improved_ais.data.preprocessing import (
+    apply_relative_root_translation,
+    dataset_root_from_controller_h5,
+    invalid_scene_keys_from_ranges,
+)
 from improved_ais.data.window import make_training_sample
 
 
@@ -42,11 +47,15 @@ class AnimajWindowIndex:
         stride: int = 56,
         max_clips: int | None = None,
         max_windows: int | None = None,
+        relative_root_translation: bool = True,
+        range_filter_threshold: float | None = 100.0,
     ) -> None:
         self.controller_h5 = Path(controller_h5)
         self.block_keyframes_h5 = Path(block_keyframes_h5)
         self.clip_length = int(clip_length)
         self.stride = int(stride)
+        self.relative_root_translation = bool(relative_root_translation)
+        self.range_filter_threshold = range_filter_threshold
         if self.clip_length < 2:
             raise ValueError("clip_length must be at least 2")
         if self.stride < 1:
@@ -57,12 +66,22 @@ class AnimajWindowIndex:
             raise FileNotFoundError(f"block-keyframe HDF5 not found: {self.block_keyframes_h5}")
 
         self.windows: list[WindowSpec] = []
+        dataset_root = dataset_root_from_controller_h5(self.controller_h5)
+        invalid_scenes = invalid_scene_keys_from_ranges(
+            dataset_root / "ranges.csv" if dataset_root is not None else None,
+            threshold=self.range_filter_threshold,
+        )
+
         with h5py.File(self.controller_h5, "r") as controller_file, h5py.File(self.block_keyframes_h5, "r") as block_file:
             clip_ids = sorted(controller_file.keys(), key=_clip_sort_key)
             if max_clips is not None:
                 clip_ids = clip_ids[: int(max_clips)]
             for clip_id in clip_ids:
                 if clip_id not in block_file or "vectors" not in controller_file[clip_id]:
+                    continue
+                episode_id = _read_h5_text(controller_file[clip_id], "episode_id")
+                scene_id = _read_h5_text(controller_file[clip_id], "scene_id")
+                if (episode_id, scene_id) in invalid_scenes:
                     continue
                 length = int(controller_file[clip_id]["vectors"].shape[0])
                 for start in _window_starts(length, self.clip_length, self.stride):
@@ -75,7 +94,7 @@ class AnimajWindowIndex:
 
 
 class AnimajWindowDataset:
-    """Torch-compatible dataset returning paper-style AIS training samples."""
+    """Torch-compatible dataset returning masked AIS training samples."""
 
     def __init__(
         self,
@@ -86,6 +105,8 @@ class AnimajWindowDataset:
         stride: int = 56,
         max_clips: int | None = None,
         max_windows: int | None = None,
+        relative_root_translation: bool = True,
+        range_filter_threshold: float | None = 100.0,
     ) -> None:
         self.index = AnimajWindowIndex(
             controller_h5,
@@ -94,6 +115,8 @@ class AnimajWindowDataset:
             stride=stride,
             max_clips=max_clips,
             max_windows=max_windows,
+            relative_root_translation=relative_root_translation,
+            range_filter_threshold=range_filter_threshold,
         )
 
     def __len__(self) -> int:
@@ -110,6 +133,8 @@ class AnimajWindowDataset:
             bg = block_file[spec.clip_id]
             vectors = np.asarray(cg["vectors"][start:end], dtype=np.float32)
             block_mask = np.asarray(bg["block_keyframes_vectors"][start:end], dtype=bool)
+        if self.index.relative_root_translation:
+            vectors = apply_relative_root_translation(vectors)
 
         key_indices = np.flatnonzero(block_mask)
         key_indices = np.asarray(sorted(set([0, spec.length - 1, *map(int, key_indices)])), dtype=np.int64)
@@ -157,3 +182,12 @@ def torch_collate_ais(batch):
     out["clip_id"] = [str(item["clip_id"]) for item in batch]
     out["start"] = torch.tensor([int(item["start"]) for item in batch], dtype=torch.long)
     return out
+
+
+def _read_h5_text(group: h5py.Group, key: str) -> str:
+    if key not in group:
+        return ""
+    value = group[key][()]
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)

@@ -33,6 +33,9 @@ data:
     controller_h5: artifacts/hf_dataset/prod_test_dataset/vectorized_controller_values/ef25a8e5ecd2fa86420741e5646cd785aa025c44c06f4118aab77f558c8f6981/test.h5
     block_keyframes_h5: artifacts/hf_dataset/prod_test_dataset/vectorized_block_keyframes/test.h5
     stride: 224
+preprocessing:
+  relative_root_translation: true
+  range_filter_threshold: 100.0
 training:
   output_dir: runs/ais_release
   device: auto

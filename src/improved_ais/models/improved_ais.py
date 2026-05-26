@@ -10,7 +10,7 @@ from torch import nn
 
 
 class ImprovedAISBiLSTM(nn.Module):
-    """AIS-BiLSTM variant for scratch experiments.
+    """AIS-BiLSTM variant with temporal head conditioning.
 
     Adds explicit temporal progress conditioning and a grouped beta gate. The
     grouped gate reduces per-dimension switching noise by predicting beta for
