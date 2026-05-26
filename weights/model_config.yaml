@@ -1,0 +1,10 @@
+model:
+  type: improved_ais_bilstm
+  pose_dim: 596
+  input_dim: 597
+  temporal_dim: 4
+  hidden_size: 512
+  num_layers: 2
+  dropout: 0.3003
+  synthesis_hidden: 1024
+  beta_groups: 64

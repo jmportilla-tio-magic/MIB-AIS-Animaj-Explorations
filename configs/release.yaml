@@ -1,0 +1,79 @@
+seed: 1234
+
+model:
+  type: improved_ais_bilstm
+  pose_dim: 596
+  input_dim: 597
+  temporal_dim: 4
+  hidden_size: 512
+  num_layers: 2
+  dropout: 0.3003
+  synthesis_hidden: 1024
+  beta_groups: 64
+
+data:
+  clip_length: 224
+  stride: 56
+  val_stride: 224
+  train_sets:
+    - name: train
+      controller_h5: artifacts/hf_dataset/in_house_dataset/vectorized_controller_values/ef25a8e5ecd2fa86420741e5646cd785aa025c44c06f4118aab77f558c8f6981/train.h5
+      block_keyframes_h5: artifacts/hf_dataset/in_house_dataset/vectorized_block_keyframes/train.h5
+      stride: 56
+    - name: selection_retrain
+      controller_h5: artifacts/hf_dataset/in_house_dataset/vectorized_controller_values/ef25a8e5ecd2fa86420741e5646cd785aa025c44c06f4118aab77f558c8f6981/test.h5
+      block_keyframes_h5: artifacts/hf_dataset/in_house_dataset/vectorized_block_keyframes/test.h5
+      stride: 56
+  selection_sets:
+    - name: val
+      controller_h5: artifacts/hf_dataset/in_house_dataset/vectorized_controller_values/ef25a8e5ecd2fa86420741e5646cd785aa025c44c06f4118aab77f558c8f6981/test.h5
+      block_keyframes_h5: artifacts/hf_dataset/in_house_dataset/vectorized_block_keyframes/test.h5
+      stride: 224
+      max_clips: 20
+  holdout_sets:
+    - name: prod_holdout
+      controller_h5: artifacts/hf_dataset/prod_test_dataset/vectorized_controller_values/ef25a8e5ecd2fa86420741e5646cd785aa025c44c06f4118aab77f558c8f6981/test.h5
+      block_keyframes_h5: artifacts/hf_dataset/prod_test_dataset/vectorized_block_keyframes/test.h5
+      stride: 224
+
+training:
+  output_dir: runs/ais_release
+  device: auto
+  batch_size: 8
+  eval_batch_size: 8
+  num_workers: 0
+  max_steps: 10000
+  gradient_accumulation_steps: 8
+  progress: true
+  progress_bar: true
+  progress_every_steps: 25
+  dashboard: true
+  train_log_every_steps: 25
+  val_every_steps: 1000
+  save_every_steps: 1000
+  grad_clip_norm: 1.0
+  lr: 0.0001
+  weight_decay: 0.001
+  hard_copy_keyposes_in_forward: false
+  eval_only: false
+  checkpoint:
+    best_metric: val_loss
+    best_metric_mode: min
+    save_periodic: true
+    keep_every_n: 5
+  early_stopping:
+    enabled: false
+
+loss:
+  velocity_weight: 0.05
+  acceleration_weight: 0.01
+  spectral_weight: 0.001
+  gate_tv_weight: 0.001
+  keypose_weight: 10.0
+
+eval:
+  write_report: false
+  baselines: [linear, previous]
+  max_report_clips: 20
+  max_report_plots: 12
+  sets: []
